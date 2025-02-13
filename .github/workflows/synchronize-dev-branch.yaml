@@ -1,0 +1,97 @@
+name: Create or update PR targeting `dev` branch with changes from `main`.
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  create-or-update-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          # Important: Fetch all history for proper commit comparisons
+          fetch-depth: 0
+
+      - name: Check for existing PR
+        id: check_pr
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const head = 'main'; // The branch with the new commits
+            const base = 'dev'; // The branch to merge into
+
+            const existingPRs = await github.rest.pulls.list({
+              owner: owner,
+              repo: repo,
+              state: 'open',
+              head: `${owner}:${head}`,
+              base: base,
+            });
+
+            if (existingPRs.data.length > 0) {
+              return existingPRs.data[0].number; // Return PR number if exists
+            } else {
+              return false; // Return false if no PR exists
+            }
+
+      - name: Create or update PR
+        id: create_pr
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const head = 'main';
+            const base = 'dev';
+            const prNumber = ${{ steps.check_pr.outputs.result }};
+
+            const latestCommit = context.sha; // SHA of the push to main
+
+            // Get the last commit SHA on dev
+            const devBranch = await github.rest.git.getRef({
+              owner: owner,
+              repo: repo,
+              ref: `heads/${base}`,
+            });
+            const devSha = devBranch.data.object.sha;
+
+
+            // Check if there are new commits on main that are not on dev
+            const compareResult = await github.rest.repos.compareCommits({
+               owner: owner,
+               repo: repo,
+               base: devSha,
+               head: latestCommit,
+            });
+
+            if (compareResult.data.total_commits === 0 && !prNumber) {
+                console.log("No new commits to merge, skipping PR creation/update.");
+                return;
+            }
+
+            if (prNumber) {  // Update existing PR
+              await github.rest.pulls.update({
+                owner: owner,
+                repo: repo,
+                pull_number: prNumber,
+                title: `Merge main into dev`, // Update title if needed
+                body: `Automated PR update: New commits from main to dev.`, // Update body
+              });
+              console.log(`Updated PR #${prNumber}`);
+            } else { // Create new PR
+              const newPR = await github.rest.pulls.create({
+                owner: owner,
+                repo: repo,
+                head: head,
+                base: base,
+                title: `Merge main into dev`,
+                body: `Automated PR creation: Merging new commits from main to dev.`,
+              });
+              console.log(`Created PR #${newPR.data.number}`);
+            }
